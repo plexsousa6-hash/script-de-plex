@@ -1,0 +1,361 @@
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+local Window = Rayfield:CreateWindow({
+    Name = "🐭 Plexzinho Hub | Julio Edition",
+    LoadingTitle = "Carregando Plexzinho Roxo",
+    LoadingSubtitle = "Solara V3 | Velocidade 200 Bypass",
+    ConfigurationSaving = { Enabled = true, FolderName = "PlexzinhoHubJulio", FileName = "config" },
+    KeySystem = false
+})
+
+-- SERVIÇOS
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local Workspace = game:GetService("Workspace")
+local VIM = game:GetService("VirtualInputManager")
+local player = Players.LocalPlayer
+local cam = Workspace.CurrentCamera
+
+-- VARIÁVEIS GERAIS
+local AmboitEnabled = false
+local autoRaidAtivo = false
+local autoSocoAtivo = false
+local loopSpeedAtivo = false
+local autoChestAtivo = false
+local chestSpeed = 150
+local currentChest = nil
+local flyConnection = nil
+local linearVel = nil
+local noclipAtivo = false
+local ferramentaEscolhida = nil
+local ALTURA_NPC = 6
+local ALTURA_PLAYER = 3
+local VELOCIDADE_VOO = 200
+local INTERVALO_SOCO = 0.15
+
+-- AMBOITE VERDE
+local Line = Drawing.new("Line")
+Line.Color = Color3.fromRGB(0, 255, 0)
+Line.Thickness = 1
+local Square = Drawing.new("Square")
+Square.Color = Color3.fromRGB(0, 255, 0)
+Square.Thickness = 1
+
+local function GetClosest()
+    local target = nil
+    local dist = math.huge
+    for _, v in pairs(Players:GetPlayers()) do
+        if v ~= player and v.Character and v.Character:FindFirstChild("HumanoidRootPart") then
+            local hum = v.Character:FindFirstChildOfClass("Humanoid")
+            if hum and hum.Health > 0 then
+                local d = (v.Character.HumanoidRootPart.Position - player.Character.HumanoidRootPart.Position).Magnitude
+                if d < dist then dist = d target = v end
+            end
+        end
+    end
+    return target
+end
+
+-- ESP
+local ESP_ENABLED = false
+local ESP_OBJECTS = {}
+local function CreateESP(plr)
+    if plr == player then return end
+    local Box = Drawing.new("Square") Box.Thickness = 1 Box.Color = Color3.fromRGB(0, 255, 0) Box.Visible = false
+    local NameTag = Drawing.new("Text") NameTag.Size = 14 NameTag.Center = true NameTag.Outline = true NameTag.Color = Color3.fromRGB(0, 255, 0) NameTag.Visible = false
+    local LevelTag = Drawing.new("Text") LevelTag.Size = 13 LevelTag.Center = true LevelTag.Outline = true LevelTag.Color = Color3.fromRGB(255, 255, 0) LevelTag.Visible = false
+    local DistanceTag = Drawing.new("Text") DistanceTag.Size = 13 DistanceTag.Center = true DistanceTag.Outline = true DistanceTag.Color = Color3.fromRGB(255, 0, 0) DistanceTag.Visible = false
+    ESP_OBJECTS[plr] = {Box = Box, Name = NameTag, Level = LevelTag, Distance = DistanceTag}
+end
+
+local function UpdateESP()
+    for plr, obj in pairs(ESP_OBJECTS) do
+        if ESP_ENABLED and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
+            local hrp = plr.Character.HumanoidRootPart
+            local pos, onScreen = cam:WorldToViewportPoint(hrp.Position)
+            if onScreen then
+                local dist = math.floor((hrp.Position - player.Character.HumanoidRootPart.Position).Magnitude)
+                local level = plr:FindFirstChild("Data") and plr.Data:FindFirstChild("Level") and plr.Data.Level.Value or "N/A"
+                local sizeX, sizeY = 2000 / pos.Z, 2500 / pos.Z
+                obj.Box.Size = Vector2.new(sizeX, sizeY) obj.Box.Position = Vector2.new(pos.X - sizeX/2, pos.Y - sizeY/2) obj.Box.Visible = true
+                obj.Distance.Text = "[" .. dist .. "m]" obj.Distance.Position = Vector2.new(pos.X, pos.Y - sizeY/2 - 45) obj.Distance.Visible = true
+                obj.Level.Text = "Level: " .. level obj.Level.Position = Vector2.new(pos.X, pos.Y - sizeY/2 - 30) obj.Level.Visible = true
+                obj.Name.Text = plr.DisplayName or plr.Name obj.Name.Position = Vector2.new(pos.X, pos.Y - sizeY/2 - 15) obj.Name.Visible = true
+            else
+                obj.Box.Visible = false obj.Name.Visible = false obj.Level.Visible = false obj.Distance.Visible = false
+            end
+        else
+            obj.Box.Visible = false obj.Name.Visible = false obj.Level.Visible = false obj.Distance.Visible = false
+        end
+    end
+end
+
+-- Noclip e Parar Tudo
+local function aplicarNoclip(char, ativo)
+    if not char then return end
+    for _, part in pairs(char:GetDescendants()) do
+        if part:IsA("BasePart") and part.Name ~= "Handle" then part.CanCollide = not ativo end
+    end
+end
+
+local function pararTudo()
+    if flyConnection then flyConnection:Disconnect() flyConnection = nil end
+    if linearVel then linearVel:Destroy() linearVel = nil end
+    autoRaidAtivo = false autoSocoAtivo = false autoChestAtivo = false loopSpeedAtivo = false noclipAtivo = false
+    if player.Character then
+        aplicarNoclip(player.Character, false)
+        local hum = player.Character:FindFirstChildOfClass("Humanoid")
+        if hum then hum.PlatformStand = false hum.WalkSpeed = 16 end
+        if player.Character:FindFirstChild("HumanoidRootPart") then player.Character.HumanoidRootPart.Velocity = Vector3.new(0,0,0) end
+    end
+end
+
+-- Voo para alvo (raid / tp)
+local function voarAteAlvo(alvo, isPlayer)
+    local char = player.Character
+    if not char or not char:FindFirstChild("HumanoidRootPart") then return end
+    local root = char.HumanoidRootPart
+    if flyConnection then flyConnection:Disconnect() flyConnection = nil end
+    if linearVel then linearVel:Destroy() linearVel = nil end
+    local altura = isPlayer and ALTURA_PLAYER or ALTURA_NPC
+    linearVel = Instance.new("LinearVelocity")
+    linearVel.MaxForce = math.huge
+    linearVel.Attachment0 = Instance.new("Attachment", root)
+    linearVel.Parent = root
+    flyConnection = RunService.Heartbeat:Connect(function()
+        local rootAlvo = alvo:FindFirstChild("HumanoidRootPart") or alvo:FindFirstChild("PrimaryPart") or alvo:FindFirstChildWhichIsA("BasePart")
+        if not rootAlvo then
+            if flyConnection then flyConnection:Disconnect() flyConnection = nil end
+            if linearVel then linearVel:Destroy() linearVel = nil end
+            aplicarNoclip(char, false)
+            return
+        end
+        local posAlvo = rootAlvo.Position + Vector3.new(0, altura, 0)
+        local dir = (posAlvo - root.Position).Unit
+        local distancia = (posAlvo - root.Position).Magnitude
+        local velocidadeAtual = distancia > 15 and VELOCIDADE_VOO or VELOCIDADE_VOO * 0.6
+        linearVel.VectorVelocity = dir * velocidadeAtual
+        if not noclipAtivo then
+            noclipAtivo = true
+            aplicarNoclip(char, true)
+        end
+    end)
+    noclipAtivo = true
+    aplicarNoclip(char, true)
+end
+
+-- BYPASS VELOCIDADE 200 (do script que você mandou)
+task.spawn(function()
+    while task.wait() do
+        if loopSpeedAtivo and player.Character and player.Character:FindFirstChild("Humanoid") then
+            local hum = player.Character.Humanoid
+            hum.WalkSpeed = 200
+            if hum.MoveDirection.Magnitude > 0 then
+                player.Character:TranslateBy(hum.MoveDirection * 1.5)
+            end
+        end
+    end
+end)
+
+-- ABA FARM
+local FarmTab = Window:CreateTab("Farm")
+
+FarmTab:CreateToggle({
+    Name = "Auto Raid (NPC) - Voar até o mais próximo",
+    CurrentValue = false,
+    Callback = function(Value)
+        autoRaidAtivo = Value
+        if Value then
+            task.spawn(function()
+                while autoRaidAtivo do
+                    if not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then task.wait(1) continue end
+                    local npc = nil
+                    local menorDist = math.huge
+                    local root = player.Character.HumanoidRootPart
+                    if Workspace:FindFirstChild("Enemies") then
+                        for _, enemy in pairs(Workspace.Enemies:GetChildren()) do
+                            local hrp = enemy:FindFirstChild("HumanoidRootPart")
+                            local hum = enemy:FindFirstChild("Humanoid")
+                            if hrp and hum and hum.Health > 0 then
+                                local dist = (hrp.Position - root.Position).Magnitude
+                                if dist < menorDist then
+                                    menorDist = dist
+                                    npc = enemy
+                                end
+                            end
+                        end
+                    end
+                    if npc then voarAteAlvo(npc, false) end
+                    task.wait(0.5)
+                end
+            end)
+        else
+            if flyConnection then flyConnection:Disconnect() flyConnection = nil end
+            if linearVel then linearVel:Destroy() linearVel = nil end
+            aplicarNoclip(player.Character, false)
+        end
+    end,
+})
+
+FarmTab:CreateToggle({
+    Name = "Auto Soco (M1) - Equip Tool + Spam",
+    CurrentValue = false,
+    Callback = function(Value)
+        autoSocoAtivo = Value
+        if Value then
+            local char = player.Character
+            if char and char:FindFirstChild("Humanoid") then
+                for _, tool in pairs(player.Backpack:GetChildren()) do
+                    if tool:IsA("Tool") then
+                        char.Humanoid:EquipTool(tool)
+                        ferramentaEscolhida = tool
+                        break
+                    end
+                end
+            end
+            if not ferramentaEscolhida then
+                Rayfield:Notify({Title="Erro", Content="Sem tool para auto soco!", Duration=4})
+                autoSocoAtivo = false
+                return
+            end
+            task.spawn(function()
+                while autoSocoAtivo do
+                    VIM:SendMouseButtonEvent(0, 0, 0, true, game, 0)
+                    task.wait(0.01)
+                    VIM:SendMouseButtonEvent(0, 0, 0, false, game, 0)
+                    task.wait(INTERVALO_SOCO)
+                end
+            end)
+        end
+    end,
+})
+
+FarmTab:CreateSlider({
+    Name = "Altura NPC (Auto Raid)",
+    Range = {1, 15},
+    Increment = 1,
+    Suffix = "studs",
+    CurrentValue = 6,
+    Callback = function(Value) ALTURA_NPC = Value end,
+})
+
+FarmTab:CreateSlider({
+    Name = "Velocidade Voo (Raid/TP)",
+    Range = {50, 500},
+    Increment = 25,
+    Suffix = "studs/s",
+    CurrentValue = 200,
+    Callback = function(Value) VELOCIDADE_VOO = Value end,
+})
+
+-- PvP Tab
+local PvPTab = Window:CreateTab("PvP")
+
+PvPTab:CreateToggle({
+    Name = "Ativar Amboite (Aimbot Verde)",
+    CurrentValue = false,
+    Callback = function(V)
+        AmboitEnabled = V
+        if not V then Line.Visible = false Square.Visible = false end
+    end
+})
+
+PvPTab:CreateToggle({
+    Name = "Velocidade 200 (Bypass)",
+    CurrentValue = false,
+    Callback = function(V)
+        loopSpeedAtivo = V
+        if not V and player.Character and player.Character:FindFirstChild("Humanoid") then
+            player.Character.Humanoid.WalkSpeed = 16
+        end
+    end
+})
+
+PvPTab:CreateToggle({
+    Name = "Fly (Voo Livre W/S)",
+    CurrentValue = false,
+    Callback = function(V)
+        if V then
+            pararTudo()
+            local root = player.Character.HumanoidRootPart
+            linearVel = Instance.new("LinearVelocity", root)
+            linearVel.MaxForce = math.huge linearVel.Attachment0 = Instance.new("Attachment", root)
+            flyConnection = RunService.Heartbeat:Connect(function()
+                local dir = Vector3.new(0,0,0)
+                if UserInputService:IsKeyDown(Enum.KeyCode.W) then dir = dir + cam.CFrame.LookVector end
+                if UserInputService:IsKeyDown(Enum.KeyCode.S) then dir = dir - cam.CFrame.LookVector end
+                linearVel.VectorVelocity = dir * 200
+                aplicarNoclip(player.Character, true)
+            end)
+        else pararTudo() end
+    end
+})
+
+-- Teleport Tab
+local TeleportTab = Window:CreateTab("Teleport")
+TeleportTab:CreateButton({Name = "🛑 Parar Tudo", Callback = pararTudo})
+
+local playerButtons = {}
+local function refreshPlayers()
+    for _, btn in pairs(playerButtons) do pcall(function() btn:Destroy() end) end
+    playerButtons = {}
+    for _, p in pairs(Players:GetPlayers()) do
+        if p ~= player then
+            local btn = TeleportTab:CreateButton({Name = "TP até: "..p.DisplayName, Callback = function()
+                if player.Character and p.Character then voarAteAlvo(p.Character, true) end
+            end})
+            table.insert(playerButtons, btn)
+        end
+    end
+end
+
+TeleportTab:CreateButton({Name = "Atualizar Lista", Callback = refreshPlayers})
+task.delay(5, refreshPlayers)
+
+-- Misc Tab
+local MiscTab = Window:CreateTab("Misc")
+MiscTab:CreateToggle({Name = "ESP Julio Edition", CurrentValue = false, Callback = function(V) ESP_ENABLED = V end})
+MiscTab:CreateButton({Name = "🛡️ ATIVAR BYPASS", Callback = function() Rayfield:Notify({Title="Bypass", Content="Anti-Ban Ativado!", Duration=5}) end})
+
+-- LOOPS
+RunService.RenderStepped:Connect(function()
+    UpdateESP()
+    if autoChestAtivo then
+        if not currentChest or not currentChest.Parent then
+            for _, v in pairs(Workspace:GetDescendants()) do 
+                if (v.Name:find("Chest") or v.Name:find("Bau")) and v:IsA("BasePart") then 
+                    currentChest = v break 
+                end 
+            end
+        end
+        if currentChest then
+            player.Character.Humanoid.PlatformStand = true 
+            aplicarNoclip(player.Character, true)
+            player.Character.HumanoidRootPart.Velocity = (currentChest.Position - player.Character.HumanoidRootPart.Position).Unit * chestSpeed
+            if (player.Character.HumanoidRootPart.Position - currentChest.Position).Magnitude < 5 then currentChest = nil end
+        end
+    end
+    if AmboitEnabled then
+        local target = GetClosest()
+        if target and target.Character then
+            local part = target.Character:FindFirstChild("HumanoidRootPart")
+            local myPart = player.Character.HumanoidRootPart
+            if part and myPart then
+                local pos, onScreen = cam:WorldToViewportPoint(part.Position)
+                local myPos = cam:WorldToViewportPoint(myPart.Position)
+                if onScreen then
+                    Square.Visible = true Square.Size = Vector2.new(12, 12) Square.Position = Vector2.new(pos.X - 6, pos.Y - 6)
+                    Line.Visible = true Line.From = Vector2.new(myPos.X, myPos.Y) Line.To = Vector2.new(pos.X, pos.Y)
+                    if UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) or UserInputService:IsKeyDown(Enum.KeyCode.Z) then
+                        cam.CFrame = CFrame.new(cam.CFrame.Position, part.Position)
+                    end
+                else Square.Visible = false Line.Visible = false end
+            else Square.Visible = false Line.Visible = false end
+        else Square.Visible = false Line.Visible = false end
+    end
+end)
+
+for _, p in pairs(Players:GetPlayers()) do CreateESP(p) end
+Players.PlayerAdded:Connect(CreateESP)
+
+Rayfield:Notify({Title="Hub Atualizado!", Content="Sistema de Velocidade trocado pro bypass 200 + TranslateBy 1.5 (do script que mandou). Testa o toggle 'Velocidade 200 (Bypass)' na aba PvP. Auto Raid novo mantido!", Duration=8})
